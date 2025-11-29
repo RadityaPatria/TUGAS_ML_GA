@@ -1,92 +1,104 @@
-import pandas as pd
-import math
 import random
+import numpy as np
+import matplotlib.pyplot as plt
+from deap import base, creator, tools, algorithms
 
-# --- Load Dataset ---
-def load_dataset(path):
-    df = pd.read_csv(path, header=None)
-    df.columns = ["X", "Y"]
-    df["City"] = [f"C{i}" for i in range(1, len(df) + 1)]
-    return df
+# ============================
+# LOAD DATASET (x,y tanpa header)
+# ============================
 
+def load_dataset(filename):
+    data = np.loadtxt(filename, delimiter=",")  # langsung baca 2 kolom
+    return data  # shape: (N,2)
 
-# --- Jarak antar kota ---
-def distance(city1, city2):
-    return math.dist((city1["X"], city1["Y"]), (city2["X"], city2["Y"]))
+FILENAME = "data/small.csv"  # ubah sesuai kebutuhan
+cities = load_dataset(FILENAME)
+N = len(cities)
 
+# ============================
+# GA SETUP
+# ============================
 
-# --- Total jarak satu rute ---
-def route_distance(route):
+def euclidean(a, b):
+    return np.linalg.norm(a - b)  # jarak euclid
+
+def total_distance(order):
     dist = 0
-    for i in range(len(route) - 1):
-        dist += distance(route[i], route[i + 1])
-    dist += distance(route[-1], route[0])    # kembali ke kota awal
+    for i in range(N):
+        a = cities[order[i]]
+        b = cities[order[(i + 1) % N]]  # kembali ke awal
+        dist += euclidean(a, b)
     return dist
 
+# hindari error double-create
+if not hasattr(creator, "FitnessMin"):
+    creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
+if not hasattr(creator, "Individual"):
+    creator.create("Individual", list, fitness=creator.FitnessMin)
 
-# --- Fitness (semakin kecil jarak, semakin besar fitness) ---
-def fitness(route):
-    d = route_distance(route)
-    return 1 / d
+toolbox = base.Toolbox()
 
+toolbox.register("indices", random.sample, range(N), N)  # generate route
+toolbox.register("individual", tools.initIterate, creator.Individual, toolbox.indices)
+toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
-# --- Bangkitkan rute random ---
-def create_route(city_list):
-    route = city_list.copy()
-    random.shuffle(route)
-    return route
+def evaluate(ind):
+    return (total_distance(ind),)
 
+toolbox.register("evaluate", evaluate)
+toolbox.register("select", tools.selTournament, tournsize=3)
+toolbox.register("mate", tools.cxOrdered)
+toolbox.register("mutate", tools.mutShuffleIndexes, indpb=0.02)
 
-# --- Seleksi roulette ---
-def roulette_selection(pop):
-    max_val = sum(fitness(r) for r in pop)
-    pick = random.uniform(0, max_val)
-    current = 0
+# ============================
+# RUN GA
+# ============================
 
-    for route in pop:
-        current += fitness(route)
-        if current >= pick:
-            return route
+def solve_tsp_ga():
+    pop = toolbox.population(n=300)
+    NGEN = 500
 
+    result, log = algorithms.eaSimple(
+        pop,
+        toolbox,
+        cxpb=0.8,
+        mutpb=0.2,
+        ngen=NGEN,
+        verbose=True
+    )
 
-# --- Crossover: Ordered Crossover (OX) ---
-def ordered_crossover(parent1, parent2):
-    start, end = sorted(random.sample(range(len(parent1)), 2))
-    segment = parent1[start:end]
-    child = segment.copy()
+    best = tools.selBest(pop, 1)[0]
+    return best, evaluate(best)[0]
 
-    for city in parent2:
-        if city not in child:
-            child.append(city)
+# ============================
+# VISUALIZATION
+# ============================
 
-    return child
+def plot_route(best):
+    ordered = cities[best]      # urutkan koordinatnya
+    xs = ordered[:, 0]
+    ys = ordered[:, 1]
 
+    plt.figure(figsize=(10, 7))
+    plt.plot(xs, ys, 'o-', linewidth=2)
+    plt.plot([xs[-1], xs[0]], [ys[-1], ys[0]], 'o-')
+    plt.title(f"TSP Route ({FILENAME})")
+    plt.grid(True)
+    plt.show()
 
-# --- Mutasi: swap dua kota ---
-def mutate(route, rate=0.02):
-    for i in range(len(route)):
-        if random.random() < rate:
-            j = random.randint(0, len(route) - 1)
-            route[i], route[j] = route[j], route[i]
-    return route
+# ============================
+# MAIN
+# ============================
 
+if __name__ == "__main__":
+    print(f"Running GA TSP using {FILENAME}...\n")
 
-# --- Genetic Algorithm Main ---
-def genetic_algorithm(df, population_size=50, generations=300):
-    cities = df.to_dict("records")
-    population = [create_route(cities) for _ in range(population_size)]
+    best_route, best_distance = solve_tsp_ga()
 
-    for gen in range(generations):
-        new_population = []
+    print("\n======================")
+    print(" BEST RESULT FOUND")
+    print("======================")
+    print("Route:", best_route)
+    print("Distance:", best_distance)
 
-        for _ in range(population_size):
-            p1 = roulette_selection(population)
-            p2 = roulette_selection(population)
-            child = ordered_crossover(p1, p2)
-            child = mutate(child)
-            new_population.append(child)
-
-        population = new_population
-
-    best = min(population, key=lambda r: route_distance(r))
-    return best, route_distance(best)
+    plot_route(best_route)
